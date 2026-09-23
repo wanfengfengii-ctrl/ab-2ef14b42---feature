@@ -55,7 +55,10 @@ def _reject_handler(_request: Request, exc: RejectError) -> JSONResponse:
 
 @app.exception_handler(ConflictError)
 def _conflict_handler(_request: Request, exc: ConflictError) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"error": str(exc)})
+    content: dict = {"error": str(exc)}
+    if exc.reason is not None:
+        content["reason"] = exc.reason
+    return JSONResponse(status_code=409, content=content)
 
 
 @app.get("/health")
@@ -116,6 +119,59 @@ def seal(session: str) -> JSONResponse:
                 "missing_ranges": missing,
             },
         )
+    return JSONResponse(status_code=200, content=result)
+
+
+@app.post("/api/uploads/{session}/audit")
+def audit(session: str) -> JSONResponse:
+    """Re-verify that the bytes named by the receipt are still readable.
+
+    Sealed sessions only. The check never mutates upload progress; for a
+    healthy legacy session it merely backfills the trusted block index.
+    """
+    _check_session(session)
+    try:
+        result = store.audit(session)
+    except RejectError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except ConflictError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={"error": str(exc), "reason": exc.reason or "conflict"},
+        )
+    if result is None:
+        raise HTTPException(status_code=404, detail="no such session")
+    return JSONResponse(status_code=200, content=result)
+
+
+@app.post("/api/uploads/{session}/repair")
+async def repair(session: str, request: Request) -> JSONResponse:
+    """Restore abnormal chunks from the complete original file.
+
+    Acceptance gate: the uploaded file must match BOTH the receipt length
+    and its whole-file SHA-256 before any sealed byte is changed. Once
+    validated it is staged persistently, so an interrupted replacement
+    (or a service restart) resumes and converges. The receipt (including
+    sealed_at) is never modified.
+    """
+    _check_session(session)
+    data = await request.body()
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="request body must be the complete original file",
+        )
+    try:
+        result = store.repair(session, data)
+    except RejectError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except ConflictError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={"error": str(exc), "reason": exc.reason or "conflict"},
+        )
+    if result is None:
+        raise HTTPException(status_code=404, detail="no such session")
     return JSONResponse(status_code=200, content=result)
 
 

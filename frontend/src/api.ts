@@ -38,6 +38,26 @@ export interface SessionStatus {
   receipt: Receipt | null;
 }
 
+export type AuditStatus = "HEALTHY" | "DEGRADED" | "REPAIRING";
+
+export interface AuditResult {
+  session: string;
+  status: AuditStatus;
+  sealed: boolean;
+  block_index: boolean;
+  missing_ranges: [number, number][];
+  length_error_ranges: [number, number][];
+  block_digest_error_ranges: [number, number][];
+  unlocatable_digest_mismatch: boolean;
+  abnormal_ranges: [number, number][];
+  repaired_ranges: [number, number][];
+  receipt_sha256: string;
+  sealed_at: string;
+  checked_at?: string;
+  completed_at?: string;
+  already_healthy?: boolean;
+}
+
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -118,6 +138,27 @@ export async function seal(session: string): Promise<SealResult> {
       ? ((err.body as { missing_ranges: [number, number][] }).missing_ranges ?? null)
       : null;
   return { status: res.status, receipt: null, missingRanges: ranges, error: err.message };
+}
+
+export async function auditSession(session: string): Promise<AuditResult> {
+  const res = await fetch(`/api/uploads/${session}/audit`, { method: "POST" });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as AuditResult;
+}
+
+export async function repairSession(
+  session: string,
+  file: File
+): Promise<AuditResult> {
+  // Raw octet-stream body: the complete original file. The server gates on
+  // receipt length + whole-file SHA-256 before changing any sealed byte.
+  const res = await fetch(`/api/uploads/${session}/repair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as AuditResult;
 }
 
 import { sha256Bytes } from "./sha256";

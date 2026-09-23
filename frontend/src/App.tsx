@@ -8,9 +8,12 @@ import {
   ChunkAck,
   Receipt,
   SessionStatus,
+  AuditResult,
   fetchStatus,
   putChunk,
   seal,
+  auditSession,
+  repairSession,
   sha256Hex,
 } from "./api";
 import "./styles.css";
@@ -45,6 +48,9 @@ export default function App() {
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [sealed, setSealed] = useState(false);
   const [notice, setNotice] = useState<string>("");
+  const [audit, setAudit] = useState<AuditResult | null>(null);
+  const [repairFile, setRepairFile] = useState<File | null>(null);
+  const [repairDigest, setRepairDigest] = useState<string | null>(null);
 
   const sessionValid = SESSION_RE.test(session);
   const fileError = useMemo(() => {
@@ -66,6 +72,9 @@ export default function App() {
     setNotice("");
     setChunkCount(0);
     setTotalSize(0);
+    setAudit(null);
+    setRepairFile(null);
+    setRepairDigest(null);
   }, []);
 
   const onPickFile = useCallback(
@@ -197,9 +206,10 @@ export default function App() {
       setConfirmed(new Set(status.confirmed_chunks));
       setSealed(status.sealed);
       setReceipt(status.receipt);
+      setAudit(null);
       setNotice(
         status.sealed
-          ? "该会话已封存，回执如下（服务重启后仍然保留）。"
+          ? "该会话已封存，回执如下（服务重启后仍然保留）。可执行完整性复核确认字节仍可读。"
           : `已从服务器恢复进度：${status.confirmed_chunks.length}/${status.chunk_count} 块。`,
       );
     } catch (e) {
@@ -208,6 +218,88 @@ export default function App() {
       setBusy(false);
     }
   }, [resetProgress, session, sessionValid]);
+
+  const handleAudit = useCallback(async () => {
+    if (!sessionValid) return;
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await auditSession(session);
+      setAudit(result);
+      if (result.status === "HEALTHY") {
+        setNotice(
+          result.block_index
+            ? "完整性复核通过：回执所指全部字节均可读取，逐块摘要一致。"
+            : "完整性复核通过，并已为该旧会话补建可信逐块索引。",
+        );
+      } else if (result.status === "REPAIRING") {
+        setNotice("修复仍在进行（可能因上次替换中断）：请重新提交完整原文件以继续并收敛。");
+      } else {
+        setNotice("完整性复核未通过：发现异常块，详情见下方复核报告，可提交完整原文件修复。");
+      }
+    } catch (e) {
+      const err = e as ApiError;
+      setAudit(null);
+      setNotice(
+        err.status === 409
+          ? `未封存会话不可复核，上传进度未被改变：${err.message}`
+          : `复核失败：${err.message}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [session, sessionValid]);
+
+  const onPickRepairFile = useCallback(async (picked: File | null) => {
+    setRepairFile(picked);
+    setRepairDigest(null);
+    if (!picked) return;
+    const buffer = await picked.arrayBuffer();
+    setRepairDigest(await sha256Hex(buffer));
+  }, []);
+
+  const handleRepair = useCallback(async () => {
+    if (!sessionValid || !repairFile || !repairDigest) return;
+    setBusy(true);
+    setNotice("");
+    setPhase("正在上传完整原文件并由服务器按回执校验长度与摘要…");
+    try {
+      const result = await repairSession(session, repairFile);
+      setAudit(result);
+      setPhase("");
+      setNotice(
+        result.already_healthy
+          ? "会话本来即健康；重复修复返回稳定结果，回执与封存时间均未改变。"
+          : `修复完成，异常块 ${formatRanges(result.repaired_ranges)} 已还原；回执与封存时间保持不变。`,
+      );
+    } catch (e) {
+      const err = e as ApiError;
+      setPhase("");
+      const reason =
+        err.body && typeof err.body === "object" && "reason" in err.body
+          ? String((err.body as { reason: unknown }).reason)
+          : "";
+      const hint =
+        reason === "length_mismatch"
+          ? "文件长度与回执不一致"
+          : reason === "digest_mismatch"
+            ? "文件 SHA-256 与回执摘要不一致"
+            : reason === "not_sealed"
+              ? "会话尚未封存"
+              : "";
+      setNotice(
+        `修复被拒绝，封存数据未被修改${hint ? `（${hint}）` : ""}：${err.message}`,
+      );
+      // refresh the audit view so the operator sees nothing changed
+      try {
+        setAudit(await auditSession(session));
+      } catch {
+        setAudit(null);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [repairDigest, repairFile, session, sessionValid]);
 
   const pct = chunkCount ? Math.round((confirmed.size / chunkCount) * 100) : 0;
   const ready = sessionValid && !!file && !fileError && !!digest && !busy;
@@ -240,6 +332,9 @@ export default function App() {
           </button>
           <button onClick={handleSealOnly} disabled={!sessionValid || busy}>
             仅请求封存
+          </button>
+          <button onClick={handleAudit} disabled={!sessionValid || busy}>
+            完整性复核
           </button>
         </div>
 
@@ -298,6 +393,77 @@ export default function App() {
         {notice && <div className="notice">{notice}</div>}
       </section>
 
+      {(sealed || audit) && (
+        <section className="card audit">
+          <h2>完整性复核与原文件修复</h2>
+          {!sealed && (
+            <p className="sub">仅已封存会话可复核；复核不会改变任何上传进度。</p>
+          )}
+          {audit && (
+            <div className="audit-report">
+              <div className="audit-status">
+                状态：
+                <span className={`pill ${audit.status.toLowerCase()}`}>
+                  {audit.status}
+                </span>
+                {!audit.block_index && (
+                  <em className="bad"> 旧会话尚无逐块索引</em>
+                )}
+              </div>
+              <AuditLine label="缺块" ranges={audit.missing_ranges} />
+              <AuditLine label="长度异常块" ranges={audit.length_error_ranges} />
+              <AuditLine label="摘要不符块" ranges={audit.block_digest_error_ranges} />
+              {audit.unlocatable_digest_mismatch && (
+                <div className="bad">
+                  整文件摘要不符且无法定位到具体块（旧会话无逐块索引）：请提交完整原文件修复。
+                </div>
+              )}
+              <AuditLine label="本次修复块" ranges={audit.repaired_ranges} />
+              <div className="digest">
+                回执摘要：{audit.receipt_sha256} · 封存时间 {audit.sealed_at}
+              </div>
+            </div>
+          )}
+
+          {sealed && (
+            <div className="repair-box">
+              <label className="field">
+                <span>提交完整原文件修复异常块（长度与回执摘要均一致才会写入）</span>
+                <input
+                  type="file"
+                  onClick={(e) => {
+                    e.currentTarget.value = "";
+                  }}
+                  onChange={(e) => void onPickRepairFile(e.target.files?.[0] ?? null)}
+                  disabled={busy}
+                />
+                {repairFile && (
+                  <div className="meta">
+                    <div>{repairFile.name} · {repairFile.size} 字节</div>
+                    <div className="digest">
+                      整文件 SHA-256：{repairDigest ?? "计算中…"}
+                    </div>
+                  </div>
+                )}
+              </label>
+              <div className="row">
+                <button
+                  className="primary"
+                  onClick={() => void handleRepair()}
+                  disabled={!sessionValid || !repairFile || !repairDigest || busy}
+                >
+                  上传原文件并修复
+                </button>
+              </div>
+              <p className="sub">
+                修复仅替换异常块；中断后重发或服务重启会自动继续直至收敛，
+                原回执与封存时间始终不变。
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
       {errors.length > 0 && (
         <section className="card">
           <h2>错误（{errors.length}）</h2>
@@ -349,6 +515,21 @@ function ChunkGrid({
           {i}
         </span>
       ))}
+    </div>
+  );
+}
+
+function AuditLine({
+  label,
+  ranges,
+}: {
+  label: string;
+  ranges: [number, number][];
+}) {
+  return (
+    <div className="audit-line">
+      <span className="audit-label">{label}：</span>
+      {ranges.length === 0 ? <span className="good">无</span> : formatRanges(ranges)}
     </div>
   );
 }
