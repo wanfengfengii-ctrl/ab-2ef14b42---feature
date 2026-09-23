@@ -177,6 +177,21 @@ button.primary:hover:not(:disabled) {
   color: #fff;
 }
 
+.cell.bad {
+  background: #d9534f;
+  color: #fff;
+}
+
+.cell.remaining {
+  background: #e08e0b;
+  color: #fff;
+}
+
+.cell.recovered {
+  background: #3aa655;
+  color: #fff;
+}
+
 .notice {
   margin-top: 12px;
   font-size: 13px;
@@ -214,4 +229,64 @@ button.primary:hover:not(:disabled) {
   margin: 0;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   word-break: break-all;
+}
+
+.audit .hint {
+  font-size: 12px;
+  color: #5a6b7d;
+  margin: 0 0 10px;
+}
+
+.audit-status {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 9px 12px;
+  border-radius: 7px;
+  margin-bottom: 10px;
+}
+
+.audit-status.healthy {
+  background: #e8f7ee;
+  border: 1px solid #bfe3cd;
+  color: #1e8449;
+}
+
+.audit-status.degraded {
+  background: #fdecea;
+  border: 1px solid #f5c6c2;
+  color: #b03a2e;
+}
+
+.audit-status.repairing {
+  background: #fdf4e3;
+  border: 1px solid #f3d9a4;
+  color: #9c6b12;
+}
+
+.audit-lines {
+  margin: 0 0 6px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #33475b;
+}
+
+.audit-lines li {
+  margin-bottom: 5px;
+}
+
+.audit-lines .bad {
+  color: #b03a2e;
+  font-weight: 600;
+}
+
+.repair-box {
+  margin-top: 12px;
+  border-top: 1px dashed #c4d0dd;
+  padding-top: 12px;
+}
+
+.bad-notice {
+  color: #9b2c22;
+  background: #fdecea;
+  border-color: #f5c6c2;
 }

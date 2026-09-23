@@ -5,17 +5,8 @@ from __future__ import annotations
 import hashlib
 import os
 
-import pytest
-from fastapi.testclient import TestClient
-
 from app import main as web
 from app.storage import CHUNK_SIZE, UploadStore
-
-
-@pytest.fixture()
-def client(tmp_path):
-    web.store = UploadStore(str(tmp_path / "data"))
-    return TestClient(web.app)
 
 
 def _digest(blob: bytes) -> str:

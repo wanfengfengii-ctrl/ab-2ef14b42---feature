@@ -26,6 +26,10 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # ---------- Stage 3: one-shot verification (tests + frontend build + smoke) ----------
 FROM node:22-bookworm AS verify
+# The smoke test simulates silent disk corruption inside the shared data
+# volume (flip/truncate/remove a sealed chunk), so the one-shot checker needs
+# write access to the root-owned /data directory the web service creates.
+USER root
 ENV PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH \
     BASE_URL=http://web:8000

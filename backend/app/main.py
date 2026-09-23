@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .storage import (
-    CHUNK_SIZE,
     ConflictError,
     RejectError,
     UploadStore,
@@ -23,7 +22,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 STATIC_DIR = os.environ.get("STATIC_DIR", "/app/frontend/dist")
 
-app = FastAPI(title="Cryo-EM Sealing Desk", version="1.0.0")
+app = FastAPI(title="Cryo-EM Sealing Desk", version="1.1.0")
 store = UploadStore(DATA_DIR)
 
 
@@ -117,6 +116,30 @@ def seal(session: str) -> JSONResponse:
             },
         )
     return JSONResponse(status_code=200, content=result)
+
+
+@app.post("/api/uploads/{session}/audit")
+def audit(session: str) -> dict:
+    """Re-verify a sealed session against the receipt.
+
+    Returns HEALTHY / DEGRADED / REPAIRING plus the anomalous block ranges.
+    Unsealed sessions are refused (409) and upload progress is never touched.
+    """
+    _check_session(session)
+    return store.audit(session)
+
+
+@app.post("/api/uploads/{session}/repair")
+async def repair(session: str, request: Request) -> dict:
+    """Repair anomalous blocks from the complete original file.
+
+    The body is used only when its length and whole-file digest match the
+    sealed receipt; block replacement is resumable across interrupted
+    requests and service restarts, and the receipt never changes.
+    """
+    _check_session(session)
+    data = await request.body()
+    return store.repair(session, data)
 
 
 # Serve the built React SPA from the same origin (API routes take priority).

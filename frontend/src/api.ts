@@ -27,6 +27,27 @@ export interface Receipt {
   sealed_at: string;
 }
 
+export type AuditStatus = "HEALTHY" | "DEGRADED" | "REPAIRING";
+
+export interface AuditResult {
+  session: string;
+  status: AuditStatus;
+  sealed: boolean;
+  chunk_count: number;
+  index_present: boolean;
+  index_built: boolean;
+  missing_ranges: [number, number][];
+  length_anomaly_ranges: [number, number][];
+  digest_mismatch_ranges: [number, number][];
+  digest_mismatch_located: boolean;
+  unlocated_digest_mismatch: boolean;
+  bad_ranges: [number, number][];
+  remaining_ranges: [number, number][];
+  recovered_ranges: [number, number][];
+  already_healthy?: boolean;
+  receipt: Receipt;
+}
+
 export interface SessionStatus {
   session: string;
   total_size: number;
@@ -36,6 +57,8 @@ export interface SessionStatus {
   missing_ranges: [number, number][];
   sealed: boolean;
   receipt: Receipt | null;
+  index_present?: boolean;
+  repair_active?: boolean;
 }
 
 export class ApiError extends Error {
@@ -118,6 +141,30 @@ export async function seal(session: string): Promise<SealResult> {
       ? ((err.body as { missing_ranges: [number, number][] }).missing_ranges ?? null)
       : null;
   return { status: res.status, receipt: null, missingRanges: ranges, error: err.message };
+}
+
+export async function auditSession(session: string): Promise<AuditResult> {
+  const res = await fetch(`/api/uploads/${session}/audit`, { method: "POST" });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as AuditResult;
+}
+
+/**
+ * Upload the complete original file to repair anomalous sealed blocks.
+ * The server accepts it only when length and whole-file SHA-256 match the
+ * sealed receipt; an interrupted repair resumes on the next call.
+ */
+export async function repairSession(
+  session: string,
+  bytes: ArrayBuffer
+): Promise<AuditResult> {
+  const res = await fetch(`/api/uploads/${session}/repair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: bytes,
+  });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as AuditResult;
 }
 
 import { sha256Bytes } from "./sha256";

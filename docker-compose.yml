@@ -35,6 +35,11 @@ services:
     container_name: sealing-desk-verify
     environment:
       BASE_URL: http://web:8000
+      DATA_DIR: /data
+    # Same persistent directory as web, so the smoke can simulate silent disk
+    # corruption (flip/truncate/remove a chunk) and exercise audit + repair.
+    volumes:
+      - ./data:/data
     depends_on:
       web:
         condition: service_healthy
